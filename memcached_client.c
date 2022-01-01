@@ -15,7 +15,14 @@
 #define CMD 0xff
 #define CMD_ECHO 1
 #define CMD_WINDOW_SIZE 31
- 
+
+
+typedef struct _item {
+    char *key;
+    int size;
+    int count;
+} item;
+
 void negotiate(int sock, unsigned char *buf, int len) {
     int i;
      
@@ -63,17 +70,27 @@ int main(int argc , char *argv[]) {
     int sock;
     struct sockaddr_in server;
     unsigned char buf[BUFLEN + 1];
+    char read_buf[BUFLEN];
+    int size, count;
+    FILE *f;
+    char *key;
+    item *items;
     int len;
     int i;
- 
-    if (argc < 2 || argc > 3) {
-        printf("Usage: %s address [port]\n", argv[0]);
+   
+    if (argc != 2) {
+        printf("Usage: %s configfile\n", argv[0]);
         return 1;
     }
-    int port = 23;
-    if (argc == 3)
-        port = atoi(argv[2]);
- 
+    int port = 11211;
+    
+    f = fopen("config", "r");
+    while (fgets(read_buf, BUFLEN, f) != NULL){
+        sscanf(read_buf, "%[^,],%d,%d", key, &size, &count);
+        printf("key = %s, keylen = %lu, sz = %d, cnt = %d \n", key, strlen(key), size, count);
+    }
+    fclose(f);
+    
     //Create socket
     sock = socket(AF_INET , SOCK_STREAM , 0);
     if (sock == -1) {
@@ -81,7 +98,7 @@ int main(int argc , char *argv[]) {
         return 1;
     }
  
-    server.sin_addr.s_addr = inet_addr(argv[1]);
+    server.sin_addr.s_addr = inet_addr("127.0.0.1");
     server.sin_family = AF_INET;
     server.sin_port = htons(port);
  
@@ -91,7 +108,7 @@ int main(int argc , char *argv[]) {
         return 1;
     }
     puts("Connected...\n");
- 
+
     // set terminal
     terminal_set();
     atexit(terminal_reset);
