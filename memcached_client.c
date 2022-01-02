@@ -23,60 +23,39 @@ typedef struct _item {
     int count;
 } item;
 
-void negotiate(int sock, unsigned char *buf, int len) {
-    int i;
-     
-    if (buf[1] == DO && buf[2] == CMD_WINDOW_SIZE) {
-        unsigned char tmp1[10] = {255, 251, 31};
-        if (send(sock, tmp1, 3 , 0) < 0)
-            exit(1);
-         
-        unsigned char tmp2[10] = {255, 250, 31, 0, 80, 0, 24, 255, 240};
-        if (send(sock, tmp2, 9, 0) < 0)
-            exit(1);
-        return;
-    }
-     
-    for (i = 0; i < len; i++) {
-        if (buf[i] == DO)
-            buf[i] = WONT;
-        else if (buf[i] == WILL)
-            buf[i] = DO;
-    }
- 
-    if (send(sock, buf, len , 0) < 0)
-        exit(1);
+
+static item pack_item(const char *key, int len, int size, int count){
+    item it;
+    it.count = count;
+    it.size = size;
+    it.key = malloc(len+1);
+    strcpy(it.key, key);
+    it.key[len] = '\0';
+    return it;
 }
- 
-static struct termios tin;
- 
-static void terminal_set(void) {
-    // save terminal configuration
-    tcgetattr(STDIN_FILENO, &tin);
-     
-    static struct termios tlocal;
-    memcpy(&tlocal, &tin, sizeof(tin));
-    cfmakeraw(&tlocal);
-    tcsetattr(STDIN_FILENO,TCSANOW,&tlocal);
-}
- 
-static void terminal_reset(void) {
-    // restore terminal upon exit
-    tcsetattr(STDIN_FILENO,TCSANOW,&tin);
-}
+
  
 #define BUFLEN 20
+#define INIT_SIZE 10
+#define ITEM_PACK_SIZE 1024
+
+
 int main(int argc , char *argv[]) {
     int sock;
     struct sockaddr_in server;
     unsigned char buf[BUFLEN + 1];
     char read_buf[BUFLEN];
+    char send_buf[ITEM_PACK_SIZE];
     int size, count;
     FILE *f;
     char *key;
+    char *word;
     item *items;
+    int item_count, item_limit = INIT_SIZE;
     int len;
     int i;
+    char *prefix;
+    char *value;
    
     if (argc != 2) {
         printf("Usage: %s configfile\n", argv[0]);
@@ -84,12 +63,36 @@ int main(int argc , char *argv[]) {
     }
     int port = 11211;
     
+
+    items = (item *)malloc(item_limit*sizeof(item));
+    item_count = 0;
     f = fopen("config", "r");
     while (fgets(read_buf, BUFLEN, f) != NULL){
-        sscanf(read_buf, "%[^,],%d,%d", key, &size, &count);
-        printf("key = %s, keylen = %lu, sz = %d, cnt = %d \n", key, strlen(key), size, count);
+        key = strtok(read_buf, ",");
+        word = strtok(NULL, ",");
+        size = atoi(word);
+        word = strtok(NULL, ",");
+        count = atoi(word);
+        if(item_count < item_limit){            
+            items[item_count++] = pack_item(key, strlen(key), size, count);
+        } else{
+            int newlimit = item_limit * 2;
+            item *new_items = realloc(items, newlimit*sizeof(item));
+            if (new_items == NULL){
+                perror("Could not realloc memory. Error");
+                return 1;
+            }
+            items = new_items;
+            item_limit = newlimit;            
+            items[item_count++] = pack_item(key, strlen(key), size, count);           
+        }
     }
     fclose(f);
+    for (i=0; i<item_count; i++){
+        item it = items[i];
+        printf("key = %s, keylen = %lu, sz = %d, cnt = %d \n", it.key, 
+               strlen(it.key), it.size, it.count);
+    }
     
     //Create socket
     sock = socket(AF_INET , SOCK_STREAM , 0);
@@ -108,70 +111,34 @@ int main(int argc , char *argv[]) {
         return 1;
     }
     puts("Connected...\n");
-
-    // set terminal
-    terminal_set();
-    atexit(terminal_reset);
-     
-    struct timeval ts;
-    ts.tv_sec = 1; // 1 second
-    ts.tv_usec = 0;
  
-    while (1) {
-        // select setup
-        fd_set fds;
-        FD_ZERO(&fds);
-        if (sock != 0)
-            FD_SET(sock, &fds);
-        FD_SET(0, &fds);
- 
-        // wait for data
-        int nready = select(sock + 1, &fds, (fd_set *) 0, (fd_set *) 0, &ts);
-        if (nready < 0) {
-            perror("select. Error");
-            return 1;
-        }
-        else if (nready == 0) {
-            ts.tv_sec = 1; // 1 second
-            ts.tv_usec = 0;
-        }
-        else if (sock != 0 && FD_ISSET(sock, &fds)) {
-            // start by reading a single byte
-            int rv;
-            if ((rv = recv(sock , buf , 1 , 0)) < 0)
-                return 1;
-            else if (rv == 0) {
-                printf("Connection closed by the remote end\n\r");
-                return 0;
-            }
- 
-            if (buf[0] == CMD) {
-                // read 2 more bytes
-                len = recv(sock , buf + 1 , 2 , 0);
-                if (len  < 0)
-                    return 1;
-                else if (len == 0) {
-                    printf("Connection closed by the remote end\n\r");
-                    return 0;
-                }
-                negotiate(sock, buf, 3);
-            }
-            else {
-                len = 1;
-                buf[len] = '\0';
-                printf("%s", buf);
-                fflush(0);
+    int global_counter = 0;  
+    for (i=0; i<item_count; i++){
+        item it = items[i];
+        prefix = it.key;
+        size = it.size;
+        count = it.count;
+        value = (char *)malloc(size*sizeof(char)+1);
+        for(int j=0; j < size; j++)
+            value[j] = 'x';
+        value[size] = '\0';
+        
+        for(int j=0; j < count; j++){
+            if(sprintf(send_buf, "set %s%d 0 0 %d noreply\r\n%s\r\n", 
+                prefix, global_counter, size, value) > 0){
+                if (send(sock, send_buf, strlen(send_buf), 0) < 0)
+                    exit(1);
+                global_counter++;     
             }
         }
-         
-        else if (FD_ISSET(0, &fds)) {
-            buf[0] = getc(stdin); //fgets(buf, 1, stdin);
-            if (send(sock, buf, 1, 0) < 0)
-                return 1;
-            if (buf[0] == '\n') // with the terminal in raw mode we need to force a LF
-                putchar('\r');
-        }
+        free(value);
     }
+    
+    for (i=0; i<item_count; i++){
+        item it = items[i];
+        free(it.key); 
+    }
+    free(items);
     close(sock);
     return 0;
 }
