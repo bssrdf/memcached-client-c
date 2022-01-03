@@ -119,8 +119,7 @@ int main(int argc , char *argv[]) {
         size = it.size;
         count = it.count;
         value = (char *)malloc(size*sizeof(char)+1);
-        for(int j=0; j < size; j++)
-            value[j] = 'x';
+        memset(value, 'x', size);
         value[size] = '\0';
         
         for(int j=0; j < count; j++){
